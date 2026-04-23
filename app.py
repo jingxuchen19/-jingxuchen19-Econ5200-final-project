@@ -3,9 +3,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
-from econml.dml import LinearDML
+from sklearn.model_selection import cross_val_predict
 
-# --- Page Setup ---
 st.set_page_config(page_title="NSW Job Training: Causal Analysis", layout="wide")
 st.title("Does Job Training Cause Higher Earnings?")
 st.markdown("Causal analysis of the NSW program using Double Machine Learning (DML)")
@@ -33,10 +32,6 @@ n_estimators = st.sidebar.slider(
     "Number of Trees", min_value=50, max_value=300, value=100, step=50
 )
 
-cv_folds = st.sidebar.slider(
-    "Cross-Validation Folds", min_value=2, max_value=10, value=5
-)
-
 st.sidebar.header("What-If Scenario")
 multiplier = st.sidebar.slider(
     "Treatment Intensity Multiplier",
@@ -44,32 +39,45 @@ multiplier = st.sidebar.slider(
     help="What if the program effect were scaled by this factor?"
 )
 
-# --- Run DML ---
+# --- Manual DML (no econml needed) ---
 @st.cache_data
-def run_dml(model_name, n_est, cv, random_state=42):
+def run_dml(model_name, n_est):
     Y = df['re78'].values
     T = df['treat'].values
-    W = df[['age', 'education', 'black', 'hispanic',
-            'married', 'nodegree', 're74', 're75']].values
+    covariates = ['age', 'education', 'black', 'hispanic',
+                  'married', 'nodegree', 're74', 're75']
+    W = df[covariates].values
 
     if model_name == "Gradient Boosting":
-        model_y = GradientBoostingRegressor(n_estimators=n_est, random_state=random_state)
-        model_t = GradientBoostingRegressor(n_estimators=n_est, random_state=random_state)
+        model_y = GradientBoostingRegressor(n_estimators=n_est, random_state=42)
+        model_t = GradientBoostingRegressor(n_estimators=n_est, random_state=42)
     else:
-        model_y = RandomForestRegressor(n_estimators=n_est, random_state=random_state)
-        model_t = RandomForestRegressor(n_estimators=n_est, random_state=random_state)
+        model_y = RandomForestRegressor(n_estimators=n_est, random_state=42)
+        model_t = RandomForestRegressor(n_estimators=n_est, random_state=42)
 
-    dml = LinearDML(model_y=model_y, model_t=model_t, cv=cv, random_state=random_state)
-    dml.fit(Y, T, W=W)
+    # Step 1: Residualize Y and T
+    Y_hat = cross_val_predict(model_y, W, Y, cv=5)
+    T_hat = cross_val_predict(model_t, W, T, cv=5)
 
-    ate = float(dml.ate())
-    ci = dml.ate_interval(alpha=0.05)
-    ci_lower = float(ci[0])
-    ci_upper = float(ci[1])
-    return ate, ci_lower, ci_upper
+    Y_res = Y - Y_hat
+    T_res = T - T_hat
+
+    # Step 2: Regress Y_res on T_res (the DML estimate)
+    ate = np.sum(T_res * Y_res) / np.sum(T_res * T_res)
+
+    # Standard error via heteroskedasticity-robust formula
+    n = len(Y)
+    residuals = Y_res - ate * T_res
+    V = np.sum((T_res ** 2) * (residuals ** 2)) / (np.sum(T_res ** 2) ** 2)
+    se = np.sqrt(V * n)
+
+    ci_lower = ate - 1.96 * se
+    ci_upper = ate + 1.96 * se
+
+    return ate, ci_lower, ci_upper, se
 
 with st.spinner("Running DML estimation..."):
-    ate, ci_lower, ci_upper = run_dml(model_choice, n_estimators, cv_folds)
+    ate, ci_lower, ci_upper, se = run_dml(model_choice, n_estimators)
 
 # --- What-If Counterfactual ---
 cf_ate = ate * multiplier
@@ -83,6 +91,7 @@ with col1:
     st.subheader("DML Estimate")
     st.metric("Average Treatment Effect", f"${ate:,.0f}")
     st.markdown(f"95% CI: [${ci_lower:,.0f}, ${ci_upper:,.0f}]")
+    st.markdown(f"Standard Error: ${se:,.0f}")
 
 with col2:
     st.subheader(f"What-If: {multiplier}x Intensity")
