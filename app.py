@@ -65,11 +65,11 @@ def run_dml(model_name, n_est):
     # Step 2: Regress Y_res on T_res (the DML estimate)
     ate = np.sum(T_res * Y_res) / np.sum(T_res * T_res)
 
-    # Standard error via heteroskedasticity-robust formula
+    # Standard error
     n = len(Y)
     residuals = Y_res - ate * T_res
-    V = np.sum((T_res ** 2) * (residuals ** 2)) / (np.sum(T_res ** 2) ** 2)
-    se = np.sqrt(V * n)
+    denom = np.sum(T_res ** 2)
+    se = np.sqrt(np.sum(residuals ** 2) / (n - 1)) / np.sqrt(denom)
 
     ci_lower = ate - 1.96 * se
     ci_upper = ate + 1.96 * se
@@ -91,7 +91,6 @@ with col1:
     st.subheader("DML Estimate")
     st.metric("Average Treatment Effect", f"${ate:,.0f}")
     st.markdown(f"95% CI: [${ci_lower:,.0f}, ${ci_upper:,.0f}]")
-    st.markdown(f"Standard Error: ${se:,.0f}")
 
 with col2:
     st.subheader(f"What-If: {multiplier}x Intensity")
